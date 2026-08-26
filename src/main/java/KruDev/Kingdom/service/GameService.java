@@ -95,6 +95,44 @@ public class GameService {
         return new AuthResponse(sessionToken, sanitized, code);
     }
 
+    public void leaveLobby(String code, String sessionToken) {
+        Game game = findGame(code);
+
+        if (game.getStatus() != GameStatus.LOBBY) {
+            throw new InvalidGameStateException("Cannot leave a game that has already started");
+        }
+
+        GamePlayer leavingGp = findGamePlayer(game, sessionToken);
+        String leavingNickname = leavingGp.getPlayer().getNickname();
+        boolean wasHost = game.getHostSessionToken().equals(sessionToken);
+
+        gamePlayerRepository.delete(leavingGp);
+
+        List<GamePlayer> remaining = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+
+        if (remaining.isEmpty()) {
+            gameRepository.delete(game);
+            return;
+        }
+
+        // Re-index draw order and transfer host if needed
+        for (int i = 0; i < remaining.size(); i++) {
+            remaining.get(i).setDrawOrder(i);
+        }
+        gamePlayerRepository.saveAll(remaining);
+
+        if (wasHost) {
+            game.setHostSessionToken(remaining.get(0).getPlayer().getSessionToken());
+            gameRepository.save(game);
+        }
+
+        broadcast(code, WsGameEvent.of(
+            MessageType.PLAYER_LEFT,
+            buildPublicState(game, remaining),
+            code
+        ));
+    }
+
     public void startGame(String code, String sessionToken, StartGameRequest request) {
         Game game = findGame(code);
         requireHost(game, sessionToken);

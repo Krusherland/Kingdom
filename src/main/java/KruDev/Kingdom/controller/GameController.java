@@ -78,6 +78,15 @@ public class GameController {
         return ResponseEntity.ok().build();
     }
 
+    /** Leave the lobby (removes the player from the room). */
+    @DeleteMapping("/{code}/leave")
+    public ResponseEntity<Void> leaveLobby(
+            @PathVariable String code,
+            @RequestHeader(SESSION_HEADER) String sessionToken) {
+        gameService.leaveLobby(code, sessionToken);
+        return ResponseEntity.noContent().build();
+    }
+
     /** Submit word guess during the final phase. */
     @PostMapping("/{code}/guess")
     public ResponseEntity<Map<String, Boolean>> submitGuess(
