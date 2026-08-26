@@ -1,7 +1,8 @@
 package KruDev.Kingdom.service;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -12,15 +13,15 @@ import java.util.concurrent.ScheduledFuture;
 
 @Service
 @RequiredArgsConstructor
-public class DrawingTimerService {
+public class DrawingTimerService implements ApplicationContextAware {
 
     private final TaskScheduler taskScheduler;
-    private GameService gameService;
+    private ApplicationContext applicationContext;
 
-    // Setter breaks the constructor circular dependency
-    @Autowired
-    public void setGameService(GameService gameService) {
-        this.gameService = gameService;
+    // Set after all beans are constructed — no circular dependency
+    @Override
+    public void setApplicationContext(ApplicationContext ctx) {
+        this.applicationContext = ctx;
     }
 
     private final Map<String, ScheduledFuture<?>> timers = new ConcurrentHashMap<>();
@@ -28,7 +29,7 @@ public class DrawingTimerService {
     public void schedule(String code, int delaySecs) {
         cancel(code);
         ScheduledFuture<?> future = taskScheduler.schedule(
-            () -> gameService.advanceDrawerByTimer(code),
+            () -> applicationContext.getBean(GameService.class).advanceDrawerByTimer(code),
             Instant.now().plusSeconds(delaySecs)
         );
         timers.put(code, future);
