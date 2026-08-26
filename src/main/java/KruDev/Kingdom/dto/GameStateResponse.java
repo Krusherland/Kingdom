@@ -17,4 +17,5 @@ public class GameStateResponse {
     private List<PlayerInfoResponse> players;
     /** "INNOCENTS", "OUTSIDERS", or null if still ongoing. */
     private String winner;
+    private int drawingTimeSecs;
 }

@@ -26,6 +26,7 @@ public class GameService {
     private final RoundRepository roundRepository;
     private final ActionRepository actionRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final DrawingTimerService drawingTimerService;
 
     // ─── Lobby ────────────────────────────────────────────────────────────────
 
@@ -175,9 +176,13 @@ public class GameService {
         game.setCurrentRound(1);
         game.setCurrentDrawerIndex(0);
         game.setStatus(GameStatus.DRAWING);
+        int drawTime = (request != null && request.getDrawingTimeSecs() != null)
+            ? Math.max(10, Math.min(120, request.getDrawingTimeSecs())) : 40;
+        game.setDrawingTimeSecs(drawTime);
         gameRepository.save(game);
 
         broadcast(code, WsGameEvent.of(MessageType.GAME_STARTED, buildPublicState(game, players), code));
+        drawingTimerService.schedule(code, drawTime);
     }
 
     // ─── State queries ────────────────────────────────────────────────────────
@@ -246,19 +251,33 @@ public class GameService {
             throw new UnauthorizedActionException("Only the host or current drawer can advance");
         }
 
+        drawingTimerService.cancel(code);
+        doAdvanceDrawer(game);
+    }
+
+    /** Called by the drawing timer when time expires for the current drawer. */
+    public void advanceDrawerByTimer(String code) {
+        Game game = gameRepository.findByCode(code).orElse(null);
+        if (game == null || game.getStatus() != GameStatus.DRAWING) return;
+        doAdvanceDrawer(game);
+    }
+
+    private void doAdvanceDrawer(Game game) {
         List<GamePlayer> alivePlayers = getAlivePlayersOrdered(game);
         int nextIdx = game.getCurrentDrawerIndex() + 1;
 
         if (nextIdx >= alivePlayers.size()) {
+            drawingTimerService.cancel(game.getCode());
             startNightPhase(game);
         } else {
             game.setCurrentDrawerIndex(nextIdx);
             gameRepository.save(game);
-            broadcast(code, WsGameEvent.of(
+            broadcast(game.getCode(), WsGameEvent.of(
                 MessageType.DRAWER_CHANGED,
                 alivePlayers.get(nextIdx).getPlayer().getNickname(),
-                code
+                game.getCode()
             ));
+            drawingTimerService.schedule(game.getCode(), game.getDrawingTimeSecs());
         }
     }
 
@@ -392,6 +411,7 @@ public class GameService {
             .currentDrawerNickname(drawerNick)
             .players(infos)
             .winner(game.getWinner())
+            .drawingTimeSecs(game.getDrawingTimeSecs())
             .build();
     }
 
