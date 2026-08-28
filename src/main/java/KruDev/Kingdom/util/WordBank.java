@@ -10,26 +10,26 @@ import java.util.Random;
 public final class WordBank {
 
     private static final List<String[]> PAIRS = List.of(
-        new String[]{"Castle", "Tower"},
-        new String[]{"Dragon", "Serpent"},
-        new String[]{"Knight", "Warrior"},
-        new String[]{"Wizard", "Sorcerer"},
-        new String[]{"Crown", "Scepter"},
-        new String[]{"Sword", "Axe"},
-        new String[]{"Shield", "Armor"},
-        new String[]{"Dungeon", "Prison"},
-        new String[]{"Throne", "Altar"},
-        new String[]{"Goblin", "Imp"},
-        new String[]{"Archer", "Hunter"},
-        new String[]{"Treasure", "Gold"},
-        new String[]{"Scroll", "Tome"},
-        new String[]{"Forge", "Anvil"},
-        new String[]{"Catapult", "Ballista"},
-        new String[]{"Jester", "Fool"},
-        new String[]{"Moat", "River"},
-        new String[]{"Plague", "Curse"},
-        new String[]{"Banner", "Flag"},
-        new String[]{"Tavern", "Inn"}
+        new String[]{"Castillo", "Torre"},
+        new String[]{"Dragón", "Serpiente"},
+        new String[]{"Caballero", "Guerrero"},
+        new String[]{"Hechicero", "Brujo"},
+        new String[]{"Corona", "Cetro"},
+        new String[]{"Espada", "Hacha"},
+        new String[]{"Escudo", "Armadura"},
+        new String[]{"Mazmorra", "Prisión"},
+        new String[]{"Trono", "Altar"},
+        new String[]{"Goblin", "Demonio"},
+        new String[]{"Arquero", "Cazador"},
+        new String[]{"Tesoro", "Monedas"},
+        new String[]{"Pergamino", "Tomo"},
+        new String[]{"Forja", "Yunque"},
+        new String[]{"Catapulta", "Ballesta"},
+        new String[]{"Bufón", "Payaso"},
+        new String[]{"Foso", "Río"},
+        new String[]{"Plaga", "Maldición"},
+        new String[]{"Estandarte", "Bandera"},
+        new String[]{"Taberna", "Posada"}
     );
 
     private static final Random RANDOM = new Random();

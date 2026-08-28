@@ -52,6 +52,14 @@ public class ActionService {
 
         // Find target
         List<GamePlayer> allPlayers = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+
+        // Validate it is this player's sequential turn
+        List<GamePlayer> aliveOrdered = allPlayers.stream().filter(GamePlayer::isAlive).collect(Collectors.toList());
+        int currentNightIdx = game.getCurrentNightActorIndex();
+        if (currentNightIdx >= aliveOrdered.size() || !aliveOrdered.get(currentNightIdx).getId().equals(actor.getId())) {
+            throw new InvalidGameStateException("No es tu turno de actuar");
+        }
+
         GamePlayer target = allPlayers.stream()
             .filter(gp -> gp.getPlayer().getNickname().equalsIgnoreCase(request.getTargetNickname()))
             .findFirst()
@@ -85,13 +93,7 @@ public class ActionService {
         actor.setHasActedThisNight(true);
         gamePlayerRepository.save(actor);
 
-        // Resolve night if all alive players have acted
-        long aliveCount = allPlayers.stream().filter(GamePlayer::isAlive).count();
-        long actedCount = allPlayers.stream().filter(gp -> gp.isAlive() && gp.isHasActedThisNight()).count();
-
-        if (actedCount >= aliveCount) {
-            resolveNight(game, currentRound, allPlayers);
-        }
+        gameService.advanceNightActorAfterAction(game);
     }
 
     // ─── Word-guess phase ─────────────────────────────────────────────────────
@@ -126,107 +128,12 @@ public class ActionService {
         return correct;
     }
 
-    // ─── Internal resolution ──────────────────────────────────────────────────
-
-    private void resolveNight(Game game, Round round, List<GamePlayer> allPlayers) {
-        List<Action> actions = actionRepository.findByRoundWithPlayers(round);
-        List<String> eliminated = new ArrayList<>();
-        boolean shieldBlocked = false;
-
-        // 1. Apply shields first
-        actions.stream()
-            .filter(a -> a.getType() == ActionType.SHIELD)
-            .forEach(a -> a.getTarget().setShieldedThisNight(true));
-
-        // 2. Process kills (Outsider)
-        for (Action a : actions) {
-            if (a.getType() == ActionType.KILL) {
-                GamePlayer target = a.getTarget();
-                if (target.isShieldedThisNight()) {
-                    shieldBlocked = true;
-                    // Award Alchemist bonus for a successful shield
-                    actions.stream()
-                        .filter(s -> s.getType() == ActionType.SHIELD
-                                  && s.getTarget().getId().equals(target.getId()))
-                        .map(Action::getActor)
-                        .forEach(alchemist -> alchemist.setScore(alchemist.getScore() + 5));
-                } else {
-                    target.setAlive(false);
-                    eliminated.add(target.getPlayer().getNickname());
-                    // Award Outsider kill bonus
-                    a.getActor().setScore(a.getActor().getScore() + 3);
-                }
-            }
-        }
-
-        // 3. Process votes (Plebeians) — most-voted unshielded player is eliminated
-        Map<GamePlayer, Long> voteCounts = actions.stream()
-            .filter(a -> a.getType() == ActionType.VOTE)
-            .collect(Collectors.groupingBy(Action::getTarget, Collectors.counting()));
-
-        if (!voteCounts.isEmpty()) {
-            long maxVotes = Collections.max(voteCounts.values());
-            List<GamePlayer> topVoted = voteCounts.entrySet().stream()
-                .filter(e -> e.getValue() == maxVotes)
-                .map(Map.Entry::getKey)
-                .collect(Collectors.toList());
-
-            // Tie → no elimination
-            if (topVoted.size() == 1) {
-                GamePlayer topTarget = topVoted.get(0);
-                if (topTarget.isShieldedThisNight()) {
-                    shieldBlocked = true;
-                } else if (topTarget.isAlive()) {
-                    topTarget.setAlive(false);
-                    eliminated.add(topTarget.getPlayer().getNickname());
-
-                    // Bonus if innocents voted out an Outsider
-                    if (topTarget.getRole() == Role.OUTSIDER) {
-                        actions.stream()
-                            .filter(a -> a.getType() == ActionType.VOTE)
-                            .map(Action::getActor)
-                            .forEach(voter -> voter.setScore(voter.getScore() + 10));
-                    }
-                }
-            }
-        }
-
-        // 4. Royal Guard reveal — result is read via getMyState, no extra effect here
-
-        // Persist all GamePlayer changes (score, alive, shielded)
-        gamePlayerRepository.saveAll(allPlayers);
-
-        round.setNightComplete(true);
-        roundRepository.save(round);
-
-        // Broadcast public night result
-        String nextPhase = determineNextPhase(game);
-        NightResultResponse result = NightResultResponse.builder()
-            .roundNumber(game.getCurrentRound())
-            .eliminated(eliminated)
-            .shieldUsed(shieldBlocked)
-            .nextPhase(nextPhase)
-            .build();
-        messagingTemplate.convertAndSend(
-            "/topic/game/" + game.getCode(),
-            WsGameEvent.of(MessageType.NIGHT_RESULT, result, game.getCode())
-        );
-
-        // Transition to next phase
-        gameService.onNightResolved(game);
-    }
-
-    private String determineNextPhase(Game game) {
-        if (game.getCurrentRound() >= game.getTotalRounds()) return "WORD_GUESS";
-        return "DRAWING";
-    }
-
     private ActionType expectedActionType(Role role) {
         return switch (role) {
-            case PLEBEIAN   -> ActionType.VOTE;
-            case ALCHEMIST  -> ActionType.SHIELD;
+            case PLEBEIAN    -> ActionType.VOTE;
+            case ALCHEMIST   -> ActionType.SHIELD;
             case ROYAL_GUARD -> ActionType.REVEAL;
-            case OUTSIDER   -> ActionType.KILL;
+            case OUTSIDER    -> ActionType.KILL;
         };
     }
 }

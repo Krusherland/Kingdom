@@ -30,6 +30,7 @@ public class Game {
 
     private int currentRound = 0;
     private int currentDrawerIndex = 0;
+    private int currentNightActorIndex = 0;
     private int totalRounds = 3;
     private int drawingTimeSecs = 40;
 

@@ -27,6 +27,7 @@ public class GameService {
     private final ActionRepository actionRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final DrawingTimerService drawingTimerService;
+    private final NightTimerService nightTimerService;
 
     // ─── Lobby ────────────────────────────────────────────────────────────────
 
@@ -262,6 +263,115 @@ public class GameService {
         doAdvanceDrawer(game);
     }
 
+    /** Called by the night timer when a player's 15-second action window expires. */
+    public void advanceNightActorByTimer(String code) {
+        Game game = gameRepository.findByCode(code).orElse(null);
+        if (game == null || game.getStatus() != GameStatus.NIGHT) return;
+        List<GamePlayer> alive = getAlivePlayersOrdered(game);
+        int idx = game.getCurrentNightActorIndex();
+        if (idx < alive.size()) {
+            GamePlayer actor = alive.get(idx);
+            actor.setHasActedThisNight(true);
+            gamePlayerRepository.save(actor);
+        }
+        doAdvanceNightActor(game);
+    }
+
+    /** Called by ActionService after a player successfully submits their night action. */
+    public void advanceNightActorAfterAction(Game game) {
+        nightTimerService.cancel(game.getCode());
+        doAdvanceNightActor(game);
+    }
+
+    private void doAdvanceNightActor(Game game) {
+        List<GamePlayer> alive = getAlivePlayersOrdered(game);
+        int nextIdx = game.getCurrentNightActorIndex() + 1;
+        if (nextIdx >= alive.size()) {
+            nightTimerService.cancel(game.getCode());
+            resolveNightPhase(game);
+        } else {
+            game.setCurrentNightActorIndex(nextIdx);
+            gameRepository.save(game);
+            List<GamePlayer> all = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+            broadcast(game.getCode(), WsGameEvent.of(
+                MessageType.NIGHT_ACTOR_CHANGED, buildPublicState(game, all), game.getCode()));
+            nightTimerService.schedule(game.getCode(), 15);
+        }
+    }
+
+    private void resolveNightPhase(Game game) {
+        List<GamePlayer> allPlayers = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+        Round round = roundRepository.findByGameAndRoundNumber(game, game.getCurrentRound())
+            .orElseThrow(() -> new InvalidGameStateException("Round not found"));
+        List<Action> actions = actionRepository.findByRoundWithPlayers(round);
+        List<String> eliminated = new ArrayList<>();
+        boolean shieldBlocked = false;
+
+        actions.stream()
+            .filter(a -> a.getType() == ActionType.SHIELD)
+            .forEach(a -> a.getTarget().setShieldedThisNight(true));
+
+        for (Action a : actions) {
+            if (a.getType() == ActionType.KILL) {
+                GamePlayer target = a.getTarget();
+                if (target.isShieldedThisNight()) {
+                    shieldBlocked = true;
+                    actions.stream()
+                        .filter(s -> s.getType() == ActionType.SHIELD
+                                  && s.getTarget().getId().equals(target.getId()))
+                        .map(Action::getActor)
+                        .forEach(alch -> alch.setScore(alch.getScore() + 5));
+                } else {
+                    target.setAlive(false);
+                    eliminated.add(target.getPlayer().getNickname());
+                    a.getActor().setScore(a.getActor().getScore() + 3);
+                }
+            }
+        }
+
+        Map<GamePlayer, Long> voteCounts = actions.stream()
+            .filter(a -> a.getType() == ActionType.VOTE)
+            .collect(Collectors.groupingBy(Action::getTarget, Collectors.counting()));
+
+        if (!voteCounts.isEmpty()) {
+            long maxVotes = Collections.max(voteCounts.values());
+            List<GamePlayer> topVoted = voteCounts.entrySet().stream()
+                .filter(e -> e.getValue() == maxVotes)
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
+            if (topVoted.size() == 1) {
+                GamePlayer topTarget = topVoted.get(0);
+                if (topTarget.isShieldedThisNight()) {
+                    shieldBlocked = true;
+                } else if (topTarget.isAlive()) {
+                    topTarget.setAlive(false);
+                    eliminated.add(topTarget.getPlayer().getNickname());
+                    if (topTarget.getRole() == Role.OUTSIDER) {
+                        actions.stream()
+                            .filter(a -> a.getType() == ActionType.VOTE)
+                            .map(Action::getActor)
+                            .forEach(voter -> voter.setScore(voter.getScore() + 10));
+                    }
+                }
+            }
+        }
+
+        gamePlayerRepository.saveAll(allPlayers);
+        round.setNightComplete(true);
+        roundRepository.save(round);
+
+        String nextPhase = game.getCurrentRound() >= game.getTotalRounds() ? "WORD_GUESS" : "DRAWING";
+        NightResultResponse result = NightResultResponse.builder()
+            .roundNumber(game.getCurrentRound())
+            .eliminated(eliminated)
+            .shieldUsed(shieldBlocked)
+            .nextPhase(nextPhase)
+            .build();
+        broadcast(game.getCode(), WsGameEvent.of(MessageType.NIGHT_RESULT, result, game.getCode()));
+
+        onNightResolved(game);
+    }
+
     private void doAdvanceDrawer(Game game) {
         List<GamePlayer> alivePlayers = getAlivePlayersOrdered(game);
         int nextIdx = game.getCurrentDrawerIndex() + 1;
@@ -304,6 +414,7 @@ public class GameService {
             List<GamePlayer> alive = getAlivePlayersOrdered(game);
             String nextDrawer = alive.isEmpty() ? null : alive.get(0).getPlayer().getNickname();
             broadcast(game.getCode(), WsGameEvent.of(MessageType.DRAWER_CHANGED, nextDrawer, game.getCode()));
+            drawingTimerService.schedule(game.getCode(), game.getDrawingTimeSecs());
         }
     }
 
@@ -383,12 +494,14 @@ public class GameService {
         });
         gamePlayerRepository.saveAll(all);
 
+        game.setCurrentNightActorIndex(0);
         game.setStatus(GameStatus.NIGHT);
         gameRepository.save(game);
 
         List<GamePlayer> withPlayers = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
         broadcast(game.getCode(), WsGameEvent.of(
             MessageType.NIGHT_STARTED, buildPublicState(game, withPlayers), game.getCode()));
+        nightTimerService.schedule(game.getCode(), 15);
     }
 
     private GameStateResponse buildPublicState(Game game, List<GamePlayer> players) {
@@ -403,13 +516,33 @@ public class GameService {
                 gp.getScore()))
             .collect(Collectors.toList());
 
+        String nightActorNick = null;
+        List<NightVoteEntry> nightVotes = null;
+        if (game.getStatus() == GameStatus.NIGHT) {
+            List<GamePlayer> alive = players.stream().filter(GamePlayer::isAlive).collect(Collectors.toList());
+            int idx = game.getCurrentNightActorIndex();
+            nightActorNick = idx < alive.size() ? alive.get(idx).getPlayer().getNickname() : null;
+            nightVotes = roundRepository.findByGameAndRoundNumber(game, game.getCurrentRound())
+                .map(round -> actionRepository.findByRoundWithPlayers(round).stream()
+                    .filter(a -> a.getType() == ActionType.VOTE)
+                    .collect(Collectors.groupingBy(
+                        a -> a.getTarget().getPlayer().getNickname(),
+                        Collectors.counting()))
+                    .entrySet().stream()
+                    .map(e -> new NightVoteEntry(e.getKey(), e.getValue()))
+                    .collect(Collectors.toList()))
+                .orElse(Collections.emptyList());
+        }
+
         return GameStateResponse.builder()
             .gameCode(game.getCode())
             .status(game.getStatus())
             .currentRound(game.getCurrentRound())
             .totalRounds(game.getTotalRounds())
             .currentDrawerNickname(drawerNick)
+            .currentNightActorNickname(nightActorNick)
             .players(infos)
+            .nightVotes(nightVotes)
             .winner(game.getWinner())
             .drawingTimeSecs(game.getDrawingTimeSecs())
             .build();
