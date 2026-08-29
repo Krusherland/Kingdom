@@ -87,7 +87,7 @@ public class GameController {
         return ResponseEntity.noContent().build();
     }
 
-    /** Submit word guess during the final phase. */
+    /** Submit word guess during the final phase (Outsider only). */
     @PostMapping("/{code}/guess")
     public ResponseEntity<Map<String, Boolean>> submitGuess(
             @PathVariable String code,
@@ -95,5 +95,15 @@ public class GameController {
             @Valid @RequestBody WordGuessRequest req) {
         boolean correct = actionService.processWordGuess(code, sessionToken, req);
         return ResponseEntity.ok(Map.of("correct", correct));
+    }
+
+    /** Submit final-phase vote to eliminate a player (innocents only). */
+    @PostMapping("/{code}/final-vote")
+    public ResponseEntity<Void> submitFinalVote(
+            @PathVariable String code,
+            @RequestHeader(SESSION_HEADER) String sessionToken,
+            @Valid @RequestBody FinalVoteRequest req) {
+        actionService.processFinalVote(code, sessionToken, req);
+        return ResponseEntity.ok().build();
     }
 }

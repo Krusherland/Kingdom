@@ -19,6 +19,8 @@ public class MyStateResponse {
     private boolean hasActedThisNight;
     private int score;
     private boolean guessedCorrectly;
+    private boolean hasActedFinalPhase;
+    private String finalVoteTarget;
     /** Populated for ROYAL_GUARD only — results of their past REVEAL actions. */
     private List<RevealResult> revealResults;
 

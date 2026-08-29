@@ -33,4 +33,6 @@ public class GamePlayer {
     private int drawOrder = 0;
     private int score = 0;
     private boolean guessedCorrectly = false;
+    private String finalVoteTarget;
+    private boolean hasActedFinalPhase = false;
 }

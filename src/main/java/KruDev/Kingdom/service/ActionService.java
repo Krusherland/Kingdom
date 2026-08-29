@@ -106,26 +106,59 @@ public class ActionService {
         }
 
         GamePlayer me = gameService.findGamePlayer(game, sessionToken);
-        if (me.isGuessedCorrectly()) {
+
+        if (me.getRole() != Role.OUTSIDER) {
+            throw new InvalidGameStateException("Only the Outsider can submit a word guess");
+        }
+        if (me.isHasActedFinalPhase()) {
             throw new InvalidGameStateException("You have already submitted your guess");
         }
 
         boolean correct = game.getInnocentWord().equalsIgnoreCase(request.getWord().trim());
-        if (correct) {
-            me.setScore(me.getScore() + 10);
-            me.setGuessedCorrectly(true);
-        }
+        me.setGuessedCorrectly(correct);
+        me.setHasActedFinalPhase(true);
         gamePlayerRepository.save(me);
 
-        // Finish game once all alive players have guessed
-        List<GamePlayer> alive = gameService.getAlivePlayersOrdered(game);
-        boolean allGuessed = alive.stream().allMatch(GamePlayer::isGuessedCorrectly);
-        if (allGuessed) {
-            List<GamePlayer> all = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
-            gameService.finishGame(game, all, "INNOCENTS");
-        }
+        gameService.checkAndResolveFinalPhase(game);
 
         return correct;
+    }
+
+    // ─── Final-vote phase ─────────────────────────────────────────────────────
+
+    public void processFinalVote(String code, String sessionToken, FinalVoteRequest request) {
+        Game game = gameService.findGame(code);
+
+        if (game.getStatus() != GameStatus.WORD_GUESS) {
+            throw new InvalidGameStateException("Voting is not available right now");
+        }
+
+        GamePlayer me = gameService.findGamePlayer(game, sessionToken);
+
+        if (!me.isAlive()) {
+            throw new InvalidGameStateException("Dead players cannot vote");
+        }
+        if (me.getRole() == Role.OUTSIDER) {
+            throw new InvalidGameStateException("The Outsider cannot vote in the final phase");
+        }
+        if (me.getFinalVoteTarget() != null) {
+            throw new InvalidGameStateException("You have already voted");
+        }
+
+        List<GamePlayer> allPlayers = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+        boolean targetExists = allPlayers.stream().anyMatch(gp ->
+            gp.getPlayer().getNickname().equalsIgnoreCase(request.getTargetNickname())
+            && gp.isAlive()
+            && !gp.getPlayer().getNickname().equalsIgnoreCase(me.getPlayer().getNickname())
+        );
+        if (!targetExists) {
+            throw new InvalidGameStateException("Invalid target: " + request.getTargetNickname());
+        }
+
+        me.setFinalVoteTarget(request.getTargetNickname());
+        gamePlayerRepository.save(me);
+
+        gameService.checkAndResolveFinalPhase(game);
     }
 
     private ActionType expectedActionType(Role role) {

@@ -28,6 +28,7 @@ public class GameService {
     private final SimpMessagingTemplate messagingTemplate;
     private final DrawingTimerService drawingTimerService;
     private final NightTimerService nightTimerService;
+    private final FinalTimerService finalTimerService;
 
     // ─── Lobby ────────────────────────────────────────────────────────────────
 
@@ -213,6 +214,10 @@ public class GameService {
                 .collect(Collectors.toList());
         }
 
+        boolean hasActedFinal = me.getRole() == Role.OUTSIDER
+            ? me.isHasActedFinalPhase()
+            : me.getFinalVoteTarget() != null;
+
         return MyStateResponse.builder()
             .nickname(me.getPlayer().getNickname())
             .role(me.getRole())
@@ -222,6 +227,8 @@ public class GameService {
             .hasActedThisNight(me.isHasActedThisNight())
             .score(me.getScore())
             .guessedCorrectly(me.isGuessedCorrectly())
+            .hasActedFinalPhase(hasActedFinal)
+            .finalVoteTarget(me.getFinalVoteTarget())
             .revealResults(reveals)
             .build();
     }
@@ -406,6 +413,7 @@ public class GameService {
             gameRepository.save(game);
             broadcast(game.getCode(), WsGameEvent.of(
                 MessageType.WORD_GUESS_PHASE, buildPublicState(game, players), game.getCode()));
+            finalTimerService.schedule(game.getCode(), 30);
         } else {
             game.setCurrentRound(game.getCurrentRound() + 1);
             game.setCurrentDrawerIndex(0);
@@ -442,6 +450,68 @@ public class GameService {
 
         broadcast(game.getCode(), WsGameEvent.of(
             MessageType.GAME_FINISHED, buildPublicState(game, players), game.getCode()));
+    }
+
+    // ─── Final phase resolution ───────────────────────────────────────────────
+
+    /** Called by FinalTimerService when the 30-second window expires. */
+    public void resolveFinalPhaseByTimer(String code) {
+        Game game = gameRepository.findByCode(code).orElse(null);
+        if (game == null || game.getStatus() != GameStatus.WORD_GUESS) return;
+        doResolveFinalPhase(game);
+    }
+
+    /** Called by ActionService after each final-phase action — resolves early if all acted. */
+    public void checkAndResolveFinalPhase(Game game) {
+        List<GamePlayer> alive = getAlivePlayersOrdered(game);
+        boolean allActed = alive.stream().allMatch(gp ->
+            gp.getRole() == Role.OUTSIDER ? gp.isHasActedFinalPhase() : gp.getFinalVoteTarget() != null
+        );
+        if (allActed) doResolveFinalPhase(game);
+    }
+
+    private void doResolveFinalPhase(Game game) {
+        finalTimerService.cancel(game.getCode());
+        List<GamePlayer> all = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+        List<GamePlayer> alive = all.stream().filter(GamePlayer::isAlive).collect(Collectors.toList());
+
+        // Outsider guessing correctly wins immediately
+        boolean outsiderEscaped = alive.stream()
+            .filter(gp -> gp.getRole() == Role.OUTSIDER)
+            .anyMatch(GamePlayer::isGuessedCorrectly);
+
+        if (outsiderEscaped) {
+            finishGame(game, all, "OUTSIDERS");
+            return;
+        }
+
+        // Tally innocent votes
+        Map<String, Long> votes = alive.stream()
+            .filter(gp -> gp.getRole() != Role.OUTSIDER && gp.getFinalVoteTarget() != null)
+            .collect(Collectors.groupingBy(GamePlayer::getFinalVoteTarget, Collectors.counting()));
+
+        if (!votes.isEmpty()) {
+            long max = Collections.max(votes.values());
+            Optional<String> topNick = votes.entrySet().stream()
+                .filter(e -> e.getValue() == max)
+                .map(Map.Entry::getKey)
+                .findFirst();
+
+            if (topNick.isPresent()) {
+                Optional<GamePlayer> eliminated = all.stream()
+                    .filter(gp -> gp.getPlayer().getNickname().equals(topNick.get()))
+                    .findFirst();
+                if (eliminated.isPresent() && eliminated.get().getRole() == Role.OUTSIDER) {
+                    eliminated.get().setAlive(false);
+                    gamePlayerRepository.save(eliminated.get());
+                    finishGame(game, all, "INNOCENTS");
+                    return;
+                }
+            }
+        }
+
+        // Outsider neither guessed nor was voted out — outsiders win
+        finishGame(game, all, "OUTSIDERS");
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
