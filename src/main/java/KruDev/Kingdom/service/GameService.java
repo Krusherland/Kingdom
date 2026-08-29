@@ -225,6 +225,7 @@ public class GameService {
             .alive(me.isAlive())
             .shieldedThisNight(me.isShieldedThisNight())
             .hasActedThisNight(me.isHasActedThisNight())
+            .hasUsedSpecialAbility(me.isHasUsedSpecialAbility())
             .score(me.getScore())
             .guessedCorrectly(me.isGuessedCorrectly())
             .hasActedFinalPhase(hasActedFinal)
@@ -556,11 +557,20 @@ public class GameService {
         messagingTemplate.convertAndSend("/topic/game/" + code, event);
     }
 
+    /** Called by ActionService after a two-step role (Alchemist/Royal Guard) completes their special ability. */
+    public void onSpecialAbilityCompleted(Game game) {
+        nightTimerService.cancel(game.getCode());
+        List<GamePlayer> all = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+        broadcast(game.getCode(), WsGameEvent.of(MessageType.NIGHT_ACTOR_CHANGED, buildPublicState(game, all), game.getCode()));
+        nightTimerService.schedule(game.getCode(), 15);
+    }
+
     private void startNightPhase(Game game) {
         List<GamePlayer> all = gamePlayerRepository.findByGame(game);
         all.forEach(gp -> {
             gp.setHasActedThisNight(false);
             gp.setShieldedThisNight(false);
+            gp.setHasUsedSpecialAbility(false);
         });
         gamePlayerRepository.saveAll(all);
 

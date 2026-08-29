@@ -43,14 +43,6 @@ public class ActionService {
             throw new InvalidGameStateException("You have already acted this night");
         }
 
-        // Validate the action type matches the player's role
-        ActionType expectedType = expectedActionType(actor.getRole());
-        if (request.getActionType() != expectedType) {
-            throw new InvalidGameStateException(
-                "Your role (" + actor.getRole() + ") must perform " + expectedType);
-        }
-
-        // Find target
         List<GamePlayer> allPlayers = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
 
         // Validate it is this player's sequential turn
@@ -58,6 +50,22 @@ public class ActionService {
         int currentNightIdx = game.getCurrentNightActorIndex();
         if (currentNightIdx >= aliveOrdered.size() || !aliveOrdered.get(currentNightIdx).getId().equals(actor.getId())) {
             throw new InvalidGameStateException("No es tu turno de actuar");
+        }
+
+        // Alchemist and Royal Guard have two steps: first their special ability, then a vote
+        boolean isTwoStepRole = actor.getRole() == Role.ALCHEMIST || actor.getRole() == Role.ROYAL_GUARD;
+        ActionType expectedType;
+        if (isTwoStepRole && !actor.isHasUsedSpecialAbility()) {
+            expectedType = actor.getRole() == Role.ALCHEMIST ? ActionType.SHIELD : ActionType.REVEAL;
+        } else if (isTwoStepRole) {
+            expectedType = ActionType.VOTE;
+        } else {
+            expectedType = expectedActionType(actor.getRole());
+        }
+
+        if (request.getActionType() != expectedType) {
+            throw new InvalidGameStateException(
+                "Your role (" + actor.getRole() + ") must perform " + expectedType + " at this step");
         }
 
         GamePlayer target = allPlayers.stream()
@@ -70,12 +78,12 @@ public class ActionService {
             throw new InvalidGameStateException("Cannot target a dead player");
         }
         if (target.getId().equals(actor.getId())) {
-            // Alchemist may shield themselves; others may not self-target
-            if (actor.getRole() != Role.ALCHEMIST) {
+            // Only Alchemist may self-target, and only during their shield step
+            boolean isAlchemistShielding = actor.getRole() == Role.ALCHEMIST && !actor.isHasUsedSpecialAbility();
+            if (!isAlchemistShielding) {
                 throw new InvalidGameStateException("You cannot target yourself");
             }
         }
-        // Outsiders cannot target other Outsiders
         if (actor.getRole() == Role.OUTSIDER && target.getRole() == Role.OUTSIDER) {
             throw new InvalidGameStateException("Outsiders cannot target other Outsiders");
         }
@@ -90,10 +98,17 @@ public class ActionService {
         action.setType(request.getActionType());
         actionRepository.save(action);
 
-        actor.setHasActedThisNight(true);
-        gamePlayerRepository.save(actor);
-
-        gameService.advanceNightActorAfterAction(game);
+        if (isTwoStepRole && !actor.isHasUsedSpecialAbility()) {
+            // Step 1 done — wait for vote
+            actor.setHasUsedSpecialAbility(true);
+            gamePlayerRepository.save(actor);
+            gameService.onSpecialAbilityCompleted(game);
+        } else {
+            // Step 2 or single-step role — turn complete
+            actor.setHasActedThisNight(true);
+            gamePlayerRepository.save(actor);
+            gameService.advanceNightActorAfterAction(game);
+        }
     }
 
     // ─── Word-guess phase ─────────────────────────────────────────────────────

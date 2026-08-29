@@ -17,6 +17,7 @@ public class MyStateResponse {
     private boolean alive;
     private boolean shieldedThisNight;
     private boolean hasActedThisNight;
+    private boolean hasUsedSpecialAbility;
     private int score;
     private boolean guessedCorrectly;
     private boolean hasActedFinalPhase;

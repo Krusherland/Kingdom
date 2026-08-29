@@ -30,6 +30,7 @@ public class GamePlayer {
     private boolean alive = true;
     private boolean shieldedThisNight = false;
     private boolean hasActedThisNight = false;
+    private boolean hasUsedSpecialAbility = false;
     private int drawOrder = 0;
     private int score = 0;
     private boolean guessedCorrectly = false;
