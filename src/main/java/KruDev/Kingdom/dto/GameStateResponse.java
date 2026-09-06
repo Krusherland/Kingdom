@@ -20,4 +20,5 @@ public class GameStateResponse {
     /** "INNOCENTS", "OUTSIDERS", or null if still ongoing. */
     private String winner;
     private int drawingTimeSecs;
+    private int nightTimeSecs;
 }

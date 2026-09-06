@@ -91,7 +91,7 @@ public class GameService {
 
         broadcast(code, WsGameEvent.of(
             MessageType.PLAYER_JOINED,
-            new PlayerInfoResponse(sanitized, true, false, 0),
+            new PlayerInfoResponse(sanitized, true, false, 0, false),
             code
         ));
 
@@ -181,6 +181,9 @@ public class GameService {
         int drawTime = (request != null && request.getDrawingTimeSecs() != null)
             ? Math.max(10, Math.min(120, request.getDrawingTimeSecs())) : 40;
         game.setDrawingTimeSecs(drawTime);
+        int nightTime = (request != null && request.getNightTimeSecs() != null)
+            ? Math.max(10, Math.min(120, request.getNightTimeSecs())) : 40;
+        game.setNightTimeSecs(nightTime);
         gameRepository.save(game);
 
         broadcast(code, WsGameEvent.of(MessageType.GAME_STARTED, buildPublicState(game, players), code));
@@ -271,39 +274,22 @@ public class GameService {
         doAdvanceDrawer(game);
     }
 
-    /** Called by the night timer when a player's 15-second action window expires. */
-    public void advanceNightActorByTimer(String code) {
+    /** Called by the night timer when the night phase time window expires. */
+    public void resolveNightPhaseByTimer(String code) {
         Game game = gameRepository.findByCode(code).orElse(null);
         if (game == null || game.getStatus() != GameStatus.NIGHT) return;
-        List<GamePlayer> alive = getAlivePlayersOrdered(game);
-        int idx = game.getCurrentNightActorIndex();
-        if (idx < alive.size()) {
-            GamePlayer actor = alive.get(idx);
-            actor.setHasActedThisNight(true);
-            gamePlayerRepository.save(actor);
-        }
-        doAdvanceNightActor(game);
+        resolveNightPhase(game);
     }
 
-    /** Called by ActionService after a player successfully submits their night action. */
-    public void advanceNightActorAfterAction(Game game) {
-        nightTimerService.cancel(game.getCode());
-        doAdvanceNightActor(game);
-    }
+    /** Called by ActionService after a player submits their night action(s). */
+    public void checkAndResolveNightIfAllActed(Game game) {
+        List<GamePlayer> players = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+        broadcast(game.getCode(), WsGameEvent.of(MessageType.NIGHT_ACTOR_CHANGED, buildPublicState(game, players), game.getCode()));
 
-    private void doAdvanceNightActor(Game game) {
-        List<GamePlayer> alive = getAlivePlayersOrdered(game);
-        int nextIdx = game.getCurrentNightActorIndex() + 1;
-        if (nextIdx >= alive.size()) {
+        boolean allActed = players.stream().filter(GamePlayer::isAlive).allMatch(GamePlayer::isHasActedThisNight);
+        if (allActed) {
             nightTimerService.cancel(game.getCode());
             resolveNightPhase(game);
-        } else {
-            game.setCurrentNightActorIndex(nextIdx);
-            gameRepository.save(game);
-            List<GamePlayer> all = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
-            broadcast(game.getCode(), WsGameEvent.of(
-                MessageType.NIGHT_ACTOR_CHANGED, buildPublicState(game, all), game.getCode()));
-            nightTimerService.schedule(game.getCode(), 15);
         }
     }
 
@@ -581,7 +567,7 @@ public class GameService {
         List<GamePlayer> withPlayers = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
         broadcast(game.getCode(), WsGameEvent.of(
             MessageType.NIGHT_STARTED, buildPublicState(game, withPlayers), game.getCode()));
-        nightTimerService.schedule(game.getCode(), 15);
+        nightTimerService.schedule(game.getCode(), game.getNightTimeSecs());
     }
 
     private GameStateResponse buildPublicState(Game game, List<GamePlayer> players) {
@@ -593,15 +579,13 @@ public class GameService {
                 gp.getPlayer().getNickname(),
                 gp.isAlive(),
                 drawer != null && drawer.getId().equals(gp.getId()),
-                gp.getScore()))
+                gp.getScore(),
+                gp.isHasActedThisNight()))
             .collect(Collectors.toList());
 
         String nightActorNick = null;
         List<NightVoteEntry> nightVotes = null;
         if (game.getStatus() == GameStatus.NIGHT) {
-            List<GamePlayer> alive = players.stream().filter(GamePlayer::isAlive).collect(Collectors.toList());
-            int idx = game.getCurrentNightActorIndex();
-            nightActorNick = idx < alive.size() ? alive.get(idx).getPlayer().getNickname() : null;
             nightVotes = roundRepository.findByGameAndRoundNumber(game, game.getCurrentRound())
                 .map(round -> actionRepository.findByRoundWithPlayers(round).stream()
                     .filter(a -> a.getType() == ActionType.VOTE)
@@ -625,6 +609,7 @@ public class GameService {
             .nightVotes(nightVotes)
             .winner(game.getWinner())
             .drawingTimeSecs(game.getDrawingTimeSecs())
+            .nightTimeSecs(game.getNightTimeSecs())
             .build();
     }
 

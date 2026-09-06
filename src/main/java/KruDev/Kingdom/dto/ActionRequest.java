@@ -12,4 +12,7 @@ public class ActionRequest {
 
     @NotNull(message = "Target nickname is required")
     private String targetNickname;
+
+    /** Optional secondary vote target for two-step roles (Alchemist/Guard) submitting ability + vote together */
+    private String voteTargetNickname;
 }

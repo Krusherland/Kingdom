@@ -33,6 +33,7 @@ public class Game {
     private int currentNightActorIndex = 0;
     private int totalRounds = 3;
     private int drawingTimeSecs = 40;
+    private int nightTimeSecs = 40;
 
     @Column(nullable = false)
     private String hostSessionToken;

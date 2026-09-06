@@ -12,4 +12,5 @@ public class PlayerInfoResponse {
     private boolean alive;
     private boolean currentDrawer;
     private int score;
+    private boolean hasActedThisNight;
 }

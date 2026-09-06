@@ -29,7 +29,7 @@ public class NightTimerService implements ApplicationContextAware {
     public void schedule(String code, int delaySecs) {
         cancel(code);
         ScheduledFuture<?> future = taskScheduler.schedule(
-            () -> applicationContext.getBean(GameService.class).advanceNightActorByTimer(code),
+            () -> applicationContext.getBean(GameService.class).resolveNightPhaseByTimer(code),
             Instant.now().plusSeconds(delaySecs)
         );
         timers.put(code, future);

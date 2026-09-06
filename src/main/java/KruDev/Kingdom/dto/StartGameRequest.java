@@ -10,4 +10,6 @@ public class StartGameRequest {
     private String outsiderWord;
     /** Drawing time per player in seconds. Allowed: 20, 40, 60. Defaults to 40. */
     private Integer drawingTimeSecs;
+    /** Night action/voting time per phase in seconds. Allowed: 20, 40, 60. Defaults to 40. */
+    private Integer nightTimeSecs;
 }

@@ -44,42 +44,80 @@ public class ActionService {
         }
 
         List<GamePlayer> allPlayers = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
+        Round currentRound = roundRepository.findByGameAndRoundNumber(game, game.getCurrentRound())
+            .orElseThrow(() -> new InvalidGameStateException("Round not found"));
 
-        // Validate it is this player's sequential turn
-        List<GamePlayer> aliveOrdered = allPlayers.stream().filter(GamePlayer::isAlive).collect(Collectors.toList());
-        int currentNightIdx = game.getCurrentNightActorIndex();
-        if (currentNightIdx >= aliveOrdered.size() || !aliveOrdered.get(currentNightIdx).getId().equals(actor.getId())) {
-            throw new InvalidGameStateException("No es tu turno de actuar");
-        }
-
-        // Alchemist and Royal Guard have two steps: first their special ability, then a vote
         boolean isTwoStepRole = actor.getRole() == Role.ALCHEMIST || actor.getRole() == Role.ROYAL_GUARD;
-        ActionType expectedType;
-        if (isTwoStepRole && !actor.isHasUsedSpecialAbility()) {
-            expectedType = actor.getRole() == Role.ALCHEMIST ? ActionType.SHIELD : ActionType.REVEAL;
-        } else if (isTwoStepRole) {
-            expectedType = ActionType.VOTE;
+
+        if (isTwoStepRole && request.getVoteTargetNickname() != null && !request.getVoteTargetNickname().isBlank()) {
+            ActionType primaryType = actor.getRole() == Role.ALCHEMIST ? ActionType.SHIELD : ActionType.REVEAL;
+
+            GamePlayer primaryTarget = findValidTarget(allPlayers, actor, request.getTargetNickname(), primaryType);
+            Action primaryAction = new Action();
+            primaryAction.setRound(currentRound);
+            primaryAction.setActor(actor);
+            primaryAction.setTarget(primaryTarget);
+            primaryAction.setType(primaryType);
+            actionRepository.save(primaryAction);
+
+            GamePlayer voteTarget = findValidTarget(allPlayers, actor, request.getVoteTargetNickname(), ActionType.VOTE);
+            Action voteAction = new Action();
+            voteAction.setRound(currentRound);
+            voteAction.setActor(actor);
+            voteAction.setTarget(voteTarget);
+            voteAction.setType(ActionType.VOTE);
+            actionRepository.save(voteAction);
+
+            actor.setHasUsedSpecialAbility(true);
+            actor.setHasActedThisNight(true);
+            gamePlayerRepository.save(actor);
         } else {
-            expectedType = expectedActionType(actor.getRole());
+            ActionType expectedType;
+            if (isTwoStepRole && !actor.isHasUsedSpecialAbility()) {
+                expectedType = actor.getRole() == Role.ALCHEMIST ? ActionType.SHIELD : ActionType.REVEAL;
+            } else if (isTwoStepRole) {
+                expectedType = ActionType.VOTE;
+            } else {
+                expectedType = expectedActionType(actor.getRole());
+            }
+
+            if (request.getActionType() != expectedType) {
+                throw new InvalidGameStateException(
+                    "Your role (" + actor.getRole() + ") must perform " + expectedType + " at this step");
+            }
+
+            GamePlayer target = findValidTarget(allPlayers, actor, request.getTargetNickname(), request.getActionType());
+
+            Action action = new Action();
+            action.setRound(currentRound);
+            action.setActor(actor);
+            action.setTarget(target);
+            action.setType(request.getActionType());
+            actionRepository.save(action);
+
+            if (isTwoStepRole && !actor.isHasUsedSpecialAbility()) {
+                actor.setHasUsedSpecialAbility(true);
+                gamePlayerRepository.save(actor);
+            } else {
+                actor.setHasActedThisNight(true);
+                gamePlayerRepository.save(actor);
+            }
         }
 
-        if (request.getActionType() != expectedType) {
-            throw new InvalidGameStateException(
-                "Your role (" + actor.getRole() + ") must perform " + expectedType + " at this step");
-        }
+        gameService.checkAndResolveNightIfAllActed(game);
+    }
 
+    private GamePlayer findValidTarget(List<GamePlayer> allPlayers, GamePlayer actor, String nickname, ActionType actionType) {
         GamePlayer target = allPlayers.stream()
-            .filter(gp -> gp.getPlayer().getNickname().equalsIgnoreCase(request.getTargetNickname()))
+            .filter(gp -> gp.getPlayer().getNickname().equalsIgnoreCase(nickname))
             .findFirst()
-            .orElseThrow(() -> new InvalidGameStateException(
-                "Player not found: " + request.getTargetNickname()));
+            .orElseThrow(() -> new InvalidGameStateException("Player not found: " + nickname));
 
         if (!target.isAlive()) {
             throw new InvalidGameStateException("Cannot target a dead player");
         }
         if (target.getId().equals(actor.getId())) {
-            // Only Alchemist may self-target, and only during their shield step
-            boolean isAlchemistShielding = actor.getRole() == Role.ALCHEMIST && !actor.isHasUsedSpecialAbility();
+            boolean isAlchemistShielding = actor.getRole() == Role.ALCHEMIST && actionType == ActionType.SHIELD;
             if (!isAlchemistShielding) {
                 throw new InvalidGameStateException("You cannot target yourself");
             }
@@ -87,28 +125,7 @@ public class ActionService {
         if (actor.getRole() == Role.OUTSIDER && target.getRole() == Role.OUTSIDER) {
             throw new InvalidGameStateException("Outsiders cannot target other Outsiders");
         }
-
-        Round currentRound = roundRepository.findByGameAndRoundNumber(game, game.getCurrentRound())
-            .orElseThrow(() -> new InvalidGameStateException("Round not found"));
-
-        Action action = new Action();
-        action.setRound(currentRound);
-        action.setActor(actor);
-        action.setTarget(target);
-        action.setType(request.getActionType());
-        actionRepository.save(action);
-
-        if (isTwoStepRole && !actor.isHasUsedSpecialAbility()) {
-            // Step 1 done — wait for vote
-            actor.setHasUsedSpecialAbility(true);
-            gamePlayerRepository.save(actor);
-            gameService.onSpecialAbilityCompleted(game);
-        } else {
-            // Step 2 or single-step role — turn complete
-            actor.setHasActedThisNight(true);
-            gamePlayerRepository.save(actor);
-            gameService.advanceNightActorAfterAction(game);
-        }
+        return target;
     }
 
     // ─── Word-guess phase ─────────────────────────────────────────────────────
