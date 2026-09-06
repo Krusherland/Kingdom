@@ -145,9 +145,9 @@ public class GameService {
         }
 
         List<GamePlayer> players = gamePlayerRepository.findByGameWithPlayerOrderByDrawOrder(game);
-        if (players.size() < 6) {
+        if (players.size() < 4) {
             throw new InvalidGameStateException(
-                "Need at least 6 players to start (have " + players.size() + ")");
+                "Need at least 4 players to start (have " + players.size() + ")");
         }
 
         // Words
